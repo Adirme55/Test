@@ -39,18 +39,25 @@
     display:flex; align-items:center; gap:10px; transition:transform 0.15s;
   }
   #whatsappBtn:hover { transform:scale(1.07); }
+  /* Miss flash */
+  #missFlash {
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    font-size:3rem; font-family:'Fredoka One',cursive;
+    pointer-events:none; opacity:0; transition:opacity 0.1s;
+  }
 </style>
 </head>
 <body>
 <canvas id="gameCanvas"></canvas>
 <div id="ui">
   <div class="ui-box">🍅 <span id="hitCount">0</span></div>
-  <div id="speedIndicator">רמה: <span id="speedLevel">1</span></div>
+  <div id="speedIndicator">פגיעות: <span id="speedLevel">0</span></div>
   <div class="ui-box">⏱️ <span id="timeLeft">30</span></div>
 </div>
+<div id="missFlash">החטאת! 😅</div>
 <div id="overlay">
   <h1>🍅 להשפיל את ציון 🍅</h1>
-  <p>לחץ לזרוק עגבנייה!<br>כל פגיעה — ציון מואץ ומשתגע 😈</p>
+  <p>כוון וזרוק עגבנייה על ציון!<br>כל פגיעה — ציון מואץ ומשתגע 😈</p>
   <button id="startBtn" onclick="startGame()">התחל! 🎮</button>
 </div>
 
@@ -109,14 +116,8 @@ faceImg.src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAARgAAAEYCAYAAACHjumMA
 
 let gameRunning=false,hits=0,timeLeft=30;
 let timerInterval=null,tomatoes=[],stuckTomatoes=[];
-// Speed increases every HIT now
 let speedMult=1;
-// Dizzy eyes state
-let eyeAngle=0;        // rotation of dizzy eyes
-let eyeSpeed=0;        // how fast eyes spin — grows with hits
-let smileSize=0;       // smile width grows with hits
-let tongueTimer=0;
-let dizzyTimer=0;      // show dizzy eyes after hit
+let eyeAngle=0,eyeSpeed=0,smileSize=0,tongueTimer=0;
 
 const FACE_R=()=>Math.min(canvas.width,canvas.height)*0.14;
 const char={x:0,y:0,vx:0,vy:0,targetX:0,targetY:0,scared:false,scaredTimer:0,wobble:0};
@@ -130,19 +131,23 @@ function pickNewTarget(){
   char.targetX=pad+Math.random()*(canvas.width-pad*2);
   char.targetY=pad+Math.random()*(canvas.height-pad*2);
 }
-function onHit(){
+function onHit(tx,ty){
   hits++;
   document.getElementById('hitCount').textContent=hits;
-  // Speed up on EVERY hit
-  speedMult=1+hits*0.12;
   document.getElementById('speedLevel').textContent=hits;
-  // Dizzy eyes spin faster with each hit
-  eyeSpeed=Math.min(0.18+hits*0.025, 0.55);
-  // Smile grows with hits
-  smileSize=Math.min(hits*0.06, 1.0);
-  // Show dizzy for a moment
-  dizzyTimer=80;
+  speedMult=1+hits*0.12;
+  eyeSpeed=Math.min(0.18+hits*0.025,0.55);
+  smileSize=Math.min(hits*0.06,1.0);
   tongueTimer=60;
+  stuckTomatoes.push({offX:(tx-char.x)*0.4,offY:(ty-char.y)*0.4,size:52,alpha:1,life:200});
+  moveCharAway(tx,ty);
+  canvas.style.filter='brightness(1.9) saturate(1.8)';
+  setTimeout(()=>canvas.style.filter='',80);
+}
+function showMiss(){
+  const el=document.getElementById('missFlash');
+  el.style.opacity='1';
+  setTimeout(()=>el.style.opacity='0',400);
 }
 function moveCharAway(tx,ty){
   const dx=char.x-tx,dy=char.y-ty,dist=Math.sqrt(dx*dx+dy*dy)||1;
@@ -165,34 +170,47 @@ function updateChar(){
     char.x+=dx*0.07*speedMult;char.y+=dy*0.07*speedMult;
   }
   char.wobble=char.scared?Math.sin(Date.now()/50)*10:Math.sin(Date.now()/380)*2;
-  // Update eye spin
   eyeAngle+=eyeSpeed;
   if(tongueTimer>0)tongueTimer--;
-  if(dizzyTimer>0)dizzyTimer--;
 }
 
-function spawnTomato(x,y){
+// Tomato flies from click point toward Zion — but hits only if it reaches him
+function spawnTomato(clickX,clickY){
   playSound(punchBuffer);
-  const angle=Math.atan2(char.y-y,char.x-x);
-  const spread=(Math.random()-0.5)*0.2;
-  const spd=(20+Math.random()*8)*Math.min(speedMult,3);
-  tomatoes.push({x,y,vx:Math.cos(angle+spread)*spd,vy:Math.sin(angle+spread)*spd,
-    r:26+Math.random()*10,rot:Math.random()*Math.PI*2,rotV:(Math.random()-0.5)*0.32});
+  // Direction from click to char
+  const angle=Math.atan2(char.y-clickY,char.x-clickX);
+  const spread=(Math.random()-0.5)*0.18;
+  const spd=(22+Math.random()*8)*Math.min(speedMult,2.5);
+  tomatoes.push({
+    x:clickX, y:clickY,
+    vx:Math.cos(angle+spread)*spd,
+    vy:Math.sin(angle+spread)*spd,
+    r:26+Math.random()*8,
+    rot:Math.random()*Math.PI*2,
+    rotV:(Math.random()-0.5)*0.3,
+    hit:false
+  });
 }
+
 function updateTomatoes(){
   const r=FACE_R();
   for(let i=tomatoes.length-1;i>=0;i--){
     const t=tomatoes[i];
-    t.x+=t.vx;t.y+=t.vy;t.vy+=0.4;t.rot+=t.rotV;
-    if(t.x<-120||t.x>canvas.width+120||t.y>canvas.height+120){tomatoes.splice(i,1);continue;}
-    const dx=t.x-char.x,dy=t.y-char.y;
-    if(Math.sqrt(dx*dx+dy*dy)<r+t.r*0.5){
-      stuckTomatoes.push({offX:dx*0.4,offY:dy*0.4,size:t.r*2,alpha:1,life:200});
-      moveCharAway(t.x,t.y);
-      onHit();
+    t.x+=t.vx;t.y+=t.vy;t.vy+=0.45;t.rot+=t.rotV;
+
+    // Off screen — MISS
+    if(t.x<-120||t.x>canvas.width+120||t.y>canvas.height+120){
+      if(!t.hit) showMiss();
       tomatoes.splice(i,1);
-      canvas.style.filter='brightness(1.9) saturate(1.8)';
-      setTimeout(()=>canvas.style.filter='',80);
+      continue;
+    }
+
+    // Check hit on Zion's face
+    const dx=t.x-char.x,dy=t.y-char.y;
+    if(Math.sqrt(dx*dx+dy*dy)<r+t.r*0.45){
+      t.hit=true;
+      onHit(t.x,t.y);
+      tomatoes.splice(i,1);
     }
   }
 }
@@ -221,74 +239,41 @@ function drawFace(){
   ctx.translate(char.x,char.y);
   ctx.rotate(char.wobble*Math.PI/180);
 
-  // Shadow
   ctx.fillStyle='rgba(0,0,0,0.18)';
   ctx.beginPath();ctx.ellipse(0,r+6,r*0.65,r*0.18,0,0,Math.PI*2);ctx.fill();
 
-  // Face image clipped to circle
   ctx.save();ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.clip();
   ctx.drawImage(faceImg,-r,-r,r*2,r*2);ctx.restore();
 
-  // ---- Dizzy eyes overlay ----
   if(hits>0){
-    const eyeOffX=r*0.28, eyeOffY=-r*0.18;
-    const eyeR=r*0.18;
-    // Draw spinning X eyes on both sides
+    const eyeOffX=r*0.28,eyeOffY=-r*0.18,eyeR=r*0.18;
     [[-eyeOffX,eyeOffY],[eyeOffX,eyeOffY]].forEach(([ex,ey])=>{
-      ctx.save();
-      ctx.translate(ex,ey);
-      ctx.rotate(eyeAngle);
-      // White of eye
+      ctx.save();ctx.translate(ex,ey);ctx.rotate(eyeAngle);
       ctx.fillStyle='white';
       ctx.beginPath();ctx.arc(0,0,eyeR,0,Math.PI*2);ctx.fill();
-      // Spiral/dizzy lines
-      ctx.strokeStyle='#cc0000';
-      ctx.lineWidth=r*0.04;
-      ctx.lineCap='round';
+      ctx.strokeStyle='#cc0000';ctx.lineWidth=r*0.04;ctx.lineCap='round';
       for(let s=0;s<3;s++){
-        ctx.save();
-        ctx.rotate((s/3)*Math.PI*2);
-        ctx.beginPath();
-        ctx.moveTo(0,0);
-        ctx.lineTo(eyeR*0.85,0);
-        ctx.stroke();
+        ctx.save();ctx.rotate((s/3)*Math.PI*2);
+        ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(eyeR*0.85,0);ctx.stroke();
         ctx.restore();
       }
-      // Pupil dot
-      const px=Math.cos(eyeAngle*2)*eyeR*0.3;
-      const py=Math.sin(eyeAngle*2)*eyeR*0.3;
-      ctx.fillStyle='#111';
-      ctx.beginPath();ctx.arc(px,py,eyeR*0.22,0,Math.PI*2);ctx.fill();
+      const px=Math.cos(eyeAngle*2)*eyeR*0.3,py=Math.sin(eyeAngle*2)*eyeR*0.3;
+      ctx.fillStyle='#111';ctx.beginPath();ctx.arc(px,py,eyeR*0.22,0,Math.PI*2);ctx.fill();
       ctx.restore();
     });
-
-    // ---- Growing smile ----
     if(smileSize>0){
-      const smileW=r*(0.4+smileSize*0.5);
-      const smileY=r*0.3;
-      const smileDepth=r*(0.15+smileSize*0.35);
-      ctx.strokeStyle='#cc3300';
-      ctx.lineWidth=r*0.07;
-      ctx.lineCap='round';
-      ctx.beginPath();
-      ctx.moveTo(-smileW,smileY);
-      ctx.quadraticCurveTo(0,smileY+smileDepth,smileW,smileY);
-      ctx.stroke();
-      // Teeth appear after 5 hits
+      const sw=r*(0.4+smileSize*0.5),sy=r*0.3,sd=r*(0.15+smileSize*0.35);
+      ctx.strokeStyle='#cc3300';ctx.lineWidth=r*0.07;ctx.lineCap='round';
+      ctx.beginPath();ctx.moveTo(-sw,sy);ctx.quadraticCurveTo(0,sy+sd,sw,sy);ctx.stroke();
       if(hits>=5){
         ctx.fillStyle='white';
-        ctx.beginPath();
-        ctx.moveTo(-smileW*0.75,smileY);
-        ctx.quadraticCurveTo(0,smileY+smileDepth*0.5,smileW*0.75,smileY);
-        ctx.lineTo(smileW*0.75,smileY+smileDepth*0.4);
-        ctx.quadraticCurveTo(0,smileY+smileDepth*0.9,-smileW*0.75,smileY+smileDepth*0.4);
-        ctx.closePath();
-        ctx.fill();
+        ctx.beginPath();ctx.moveTo(-sw*0.75,sy);ctx.quadraticCurveTo(0,sy+sd*0.5,sw*0.75,sy);
+        ctx.lineTo(sw*0.75,sy+sd*0.4);ctx.quadraticCurveTo(0,sy+sd*0.9,-sw*0.75,sy+sd*0.4);
+        ctx.closePath();ctx.fill();
       }
     }
   }
 
-  // Tongue (on hit)
   if(tongueTimer>0){
     ctx.globalAlpha=Math.min(1,tongueTimer/12);
     ctx.fillStyle='#e91e8c';
@@ -299,7 +284,6 @@ function drawFace(){
     ctx.globalAlpha=1;
   }
 
-  // Border
   ctx.strokeStyle='rgba(255,255,255,0.45)';ctx.lineWidth=3;
   ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.stroke();
   ctx.restore();
@@ -345,7 +329,7 @@ async function startGame(){
   await unlockAudio();
   document.getElementById('overlay').style.display='none';
   hits=0;timeLeft=30;tomatoes=[];stuckTomatoes=[];
-  speedMult=1;eyeAngle=0;eyeSpeed=0;smileSize=0;tongueTimer=0;dizzyTimer=0;
+  speedMult=1;eyeAngle=0;eyeSpeed=0;smileSize=0;tongueTimer=0;
   document.getElementById('hitCount').textContent='0';
   document.getElementById('timeLeft').textContent='30';
   document.getElementById('speedLevel').textContent='0';
